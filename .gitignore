@@ -1,0 +1,8 @@
+shop-backend/
+venv/
+__pycache__/
+*.pyc
+.env
+media/
+staticfiles/
+db.sqlite3

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Category, Size, Color, Product, ProductImage, Sale, UserProfile
+from .models import Category, Size, Color, Product, ProductImage, Sale, UserProfile, CartItem, OwnerNotification
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -87,3 +87,18 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = ['username', 'role']
+
+class CartItemSerializer(serializers.ModelSerializer):
+    product_id = serializers.IntegerField(source='product.id', read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    price = serializers.DecimalField(source='product.selling_price', max_digits=10, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = CartItem
+        fields = ['id', 'product_id', 'product_name', 'price', 'quantity', 'added_at']
+
+
+class OwnerNotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OwnerNotification
+        fields = ['id', 'message', 'is_read', 'created_at']

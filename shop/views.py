@@ -19,7 +19,7 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-
+from .importers import read_rows, open_image_zip, import_rows, ImportFileError
 from .models import UserProfile, Category, Size, Color, Product, ProductImage, Sale
 from .serializers import (
     UserProfileSerializer, CategorySerializer, SizeSerializer, ColorSerializer,
@@ -216,10 +216,12 @@ class ProductViewSet(viewsets.ModelViewSet):
 
         try:
             rows = read_rows(upload)
+            zip_upload = request.FILES.get('images_zip')
+            image_pack = open_image_zip(zip_upload) if zip_upload else None
         except ImportFileError as exc:
             return Response({'error': str(exc)}, status=400)
 
-        return Response(import_rows(rows, category))
+        return Response(import_rows(rows, category, image_pack))
 
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):

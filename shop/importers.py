@@ -1,13 +1,20 @@
 import csv
 import io
+import os
+import zipfile
 from decimal import Decimal, InvalidOperation
 
+from django.core.files.base import ContentFile
 from django.db import transaction
 from openpyxl import load_workbook
+from PIL import Image
 
-from .models import Product, Size, Color
+from .models import Product, ProductImage, Size, Color
 
 MAX_ROWS = 1000
+IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp')
+MAX_IMAGE_BYTES = 5 * 1024 * 1024        # per picture
+MAX_ZIP_BYTES = 100 * 1024 * 1024        # all pictures together, unpacked
 
 
 class ImportFileError(Exception):
@@ -18,6 +25,7 @@ def _clean(value):
     return '' if value is None else str(value).strip()
 
 
+# ---------------------------------------------------------------- reading the sheet
 def read_rows(upload):
     """Return [(line_number, {column: value}), ...] from a .csv or .xlsx upload."""
     filename = upload.name.lower()
@@ -56,6 +64,67 @@ def read_rows(upload):
     return rows
 
 
+# ---------------------------------------------------------------- reading the images ZIP
+def open_image_zip(upload):
+    """Open the ZIP and index its pictures by lowercase file name. Nothing is unpacked to disk."""
+    try:
+        zf = zipfile.ZipFile(upload)
+    except zipfile.BadZipFile:
+        raise ImportFileError('The images file is not a valid ZIP')
+
+    lookup, total = {}, 0
+    for info in zf.infolist():
+        base = os.path.basename(info.filename)
+        # skip folders, hidden files and the "__MACOSX/._photo.jpg" junk that Mac zips contain
+        if info.is_dir() or base.startswith(('.', '_')) or not base.lower().endswith(IMAGE_EXTS):
+            continue
+        total += info.file_size
+        lookup.setdefault(base.lower(), info)
+
+    if not lookup:
+        raise ImportFileError('No .jpg, .png or .webp pictures found in the ZIP')
+    if total > MAX_ZIP_BYTES:
+        raise ImportFileError('The images ZIP is too large (limit is 100 MB unpacked)')
+    return zf, lookup
+
+
+def attach_images(product, names, zf, lookup):
+    """Attach the named pictures to a product. Returns a list of warning messages.
+
+    Only products that have NO pictures yet get any. That makes re-importing the same
+    file safe: it never piles up duplicate pictures, and it never replaces pictures the
+    owner uploaded by hand.
+    """
+    if product.images.exists():
+        return []
+
+    warnings, has_primary = [], False
+    for name in names:
+        info = lookup.get(name.lower())
+        if info is None:
+            warnings.append(f'picture "{name}" was not found in the ZIP')
+            continue
+        if info.file_size > MAX_IMAGE_BYTES:
+            warnings.append(f'picture "{name}" is bigger than 5 MB')
+            continue
+
+        data = zf.read(info)
+        try:
+            Image.open(io.BytesIO(data)).verify()          # really a picture, not a renamed file
+        except Exception:
+            warnings.append(f'picture "{name}" is not a valid image')
+            continue
+
+        ProductImage.objects.create(
+            product=product,
+            image=ContentFile(data, name=os.path.basename(info.filename)),
+            is_primary=not has_primary,                    # first valid picture = main picture
+        )
+        has_primary = True
+    return warnings
+
+
+# ---------------------------------------------------------------- validating one row
 def _decimal(value, field, required=False):
     if value == '':
         if required:
@@ -106,13 +175,17 @@ def _parse(record):
     return fields, _split(record.get('sizes', '')), _split(record.get('colors', ''))
 
 
-def import_rows(rows, category):
-    created = updated = 0
-    errors = []
+# ---------------------------------------------------------------- saving
+def import_rows(rows, category, image_pack=None):
+    """image_pack is the (zip, lookup) pair from open_image_zip(), or None if no ZIP was uploaded."""
+    created = updated = images_added = 0
+    errors, warnings = [], []
+    zip_missing_noted = False
 
     for line, record in rows:
         try:
             fields, size_names, color_specs = _parse(record)
+            image_names = _split(record.get('images', ''))
 
             with transaction.atomic():          # one row = all-or-nothing
                 product = Product.objects.filter(name__iexact=fields['name'], category=category).first()
@@ -139,10 +212,30 @@ def import_rows(rows, category):
                         colors.append(color)
                     product.colors.set(colors)
 
+                # Pictures from the ZIP
+                if image_names:
+                    if image_pack is None:
+                        if not zip_missing_noted:
+                            warnings.append({'row': None, 'warning':
+                                'The file has pictures listed but no images ZIP was uploaded, so no pictures were attached'})
+                            zip_missing_noted = True
+                    else:
+                        before = product.images.count()
+                        for message in attach_images(product, image_names, *image_pack):
+                            warnings.append({'row': line, 'warning': message})
+                        images_added += product.images.count() - before
+
             created += is_new
             updated += not is_new
 
         except ValueError as exc:
             errors.append({'row': line, 'error': str(exc)})
 
-    return {'created': created, 'updated': updated, 'skipped': len(errors), 'errors': errors}
+    return {
+        'created': created,
+        'updated': updated,
+        'skipped': len(errors),
+        'images_added': images_added,
+        'errors': errors,
+        'warnings': warnings,
+    }

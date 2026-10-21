@@ -35,6 +35,9 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from .models import Cart, CartItem, OwnerNotification
 from .serializers import CartItemSerializer, OwnerNotificationSerializer
+from rest_framework.parsers import MultiPartParser, FormParser
+from .importers import read_rows, import_rows, ImportFileError
+
 # from .permissions import IsOwner   # you likely already import this
 
 # =====================================================================
@@ -197,6 +200,26 @@ class ProductViewSet(viewsets.ModelViewSet):
         img.image.delete()
         img.delete()
         return Response(status=204)
+
+    @action(detail=False, methods=['POST'], url_path='import',permission_classes=[IsOwner], parser_classes=[MultiPartParser, FormParser])
+    def import_products(self, request):
+        upload = request.FILES.get('file')
+        if not upload:
+            return Response({'error': 'No file uploaded'}, status=400)
+        if upload.size > 5 * 1024 * 1024:
+            return Response({'error': 'File is larger than 5 MB'}, status=400)
+
+        category_id = str(request.data.get('category', ''))
+        category = Category.objects.filter(pk=category_id).first() if category_id.isdigit() else None
+        if category is None:
+            return Response({'error': 'Choose a section (category) for these products'}, status=400)
+
+        try:
+            rows = read_rows(upload)
+        except ImportFileError as exc:
+            return Response({'error': str(exc)}, status=400)
+
+        return Response(import_rows(rows, category))
 
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -700,3 +723,5 @@ class OwnerNotificationMarkReadView(APIView):
     def post(self, request):
         OwnerNotification.objects.filter(is_read=False).update(is_read=True)
         return Response({'status': 'ok'})
+
+    

@@ -10,7 +10,7 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1'] + [h for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -85,6 +85,8 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
@@ -105,7 +107,9 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:8080',
     'http://localhost:8080',
     'http://0.0.0.0:5500',
-]
+] + \
+[o for o in os.environ.get('CORS_ORIGINS', '').split(',') if o]
+
 
 CORS_ALLOW_CREDENTIALS = True
 

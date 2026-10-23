@@ -3,8 +3,10 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     api_login_view, api_signup_view, api_logout_view, api_current_user_view,
     ProductViewSet, CategoryViewSet, SizeViewSet, ColorViewSet, SaleViewSet,
-    AnalyticsView, ExportReportView,
+    AnalyticsView, ExportReportView,CartView, AddToCartView, CartItemDeleteView,
+    OwnerNotificationListView, OwnerNotificationMarkReadView,
 )
+
 
 router = DefaultRouter()
 router.register(r'products', ProductViewSet, basename='product')
@@ -26,4 +28,14 @@ urlpatterns = [
     # Analytics & Reports
     path('analytics/', AnalyticsView.as_view(), name='api_analytics'),
     path('reports/export/', ExportReportView.as_view(), name='api_export_report'),
+
+     # Cart
+    path('cart/', CartView.as_view(), name='api_cart'),
+    path('cart/add/', AddToCartView.as_view(), name='api_cart_add'),
+    path('cart/items/<int:item_id>/', CartItemDeleteView.as_view(), name='api_cart_item_delete'),
+
+    # Owner notifications
+    path('owner/notifications/', OwnerNotificationListView.as_view(), name='api_owner_notifications'),
+    path('owner/notifications/mark-read/', OwnerNotificationMarkReadView.as_view(), name='api_owner_notifications_read'),
+
 ]

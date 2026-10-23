@@ -6,3 +6,9 @@ __pycache__/
 media/
 staticfiles/
 db.sqlite3
+.env
+shop-backend/
+db.sqlite3
+__pycache__/
+media/
+staticfiles/

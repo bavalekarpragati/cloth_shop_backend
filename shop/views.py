@@ -19,7 +19,7 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-
+from .importers import read_rows, open_image_zip, import_rows, ImportFileError
 from .models import UserProfile, Category, Size, Color, Product, ProductImage, Sale
 from .serializers import (
     UserProfileSerializer, CategorySerializer, SizeSerializer, ColorSerializer,
@@ -29,6 +29,16 @@ from .serializers import (
 
 import datetime
 from decimal import Decimal
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.shortcuts import get_object_or_404
+from .models import Cart, CartItem, OwnerNotification
+from .serializers import CartItemSerializer, OwnerNotificationSerializer
+from rest_framework.parsers import MultiPartParser, FormParser
+from .importers import read_rows, import_rows, ImportFileError
+
+# from .permissions import IsOwner   # you likely already import this
 
 # =====================================================================
 # Custom DRF Permissions
@@ -190,6 +200,28 @@ class ProductViewSet(viewsets.ModelViewSet):
         img.image.delete()
         img.delete()
         return Response(status=204)
+
+    @action(detail=False, methods=['POST'], url_path='import',permission_classes=[IsOwner], parser_classes=[MultiPartParser, FormParser])
+    def import_products(self, request):
+        upload = request.FILES.get('file')
+        if not upload:
+            return Response({'error': 'No file uploaded'}, status=400)
+        if upload.size > 5 * 1024 * 1024:
+            return Response({'error': 'File is larger than 5 MB'}, status=400)
+
+        category_id = str(request.data.get('category', ''))
+        category = Category.objects.filter(pk=category_id).first() if category_id.isdigit() else None
+        if category is None:
+            return Response({'error': 'Choose a section (category) for these products'}, status=400)
+
+        try:
+            rows = read_rows(upload)
+            zip_upload = request.FILES.get('images_zip')
+            image_pack = open_image_zip(zip_upload) if zip_upload else None
+        except ImportFileError as exc:
+            return Response({'error': str(exc)}, status=400)
+
+        return Response(import_rows(rows, category, image_pack))
 
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -612,3 +644,86 @@ class ExportReportView(APIView):
         response['Content-Disposition'] = f'attachment; filename="report_{timezone.now().strftime("%Y%m%d_%H%M%S")}.pdf"'
         response.write(pdf_content)
         return response
+
+class CartView(APIView):
+    """GET /api/cart/ : the logged-in customer's cart"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        cart, _ = Cart.objects.get_or_create(user=request.user)
+        items = cart.items.select_related('product')
+        return Response(CartItemSerializer(items, many=True).data)
+
+
+class AddToCartView(APIView):
+    """POST /api/cart/add/ with {product_id, quantity}"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # 1. Read and validate input
+        try:
+            quantity = int(request.data.get('quantity', 1))
+        except (TypeError, ValueError):
+            return Response({'error': 'Quantity must be a number'}, status=400)
+        if quantity < 1:
+            return Response({'error': 'Quantity must be at least 1'}, status=400)
+
+        product = get_object_or_404(Product, pk=request.data.get('product_id'))
+
+        # 2. Stock checks
+        if product.is_out_of_stock:
+            return Response({'error': 'This product is out of stock'}, status=400)
+
+        # 3. Find or create this customer's cart and line item
+        cart, _ = Cart.objects.get_or_create(user=request.user)
+        item, _ = CartItem.objects.get_or_create(cart=cart, product=product, defaults={'quantity': 0})
+
+        new_quantity = item.quantity + quantity
+        if new_quantity > product.stock:
+            return Response({'error': f'Only {product.stock} units available'}, status=400)
+
+        item.quantity = new_quantity
+        item.save()
+
+        # 4. Tell the owner
+        OwnerNotification.objects.create(
+            customer=request.user,
+            product=product,
+            message=f"{request.user.username} added {quantity} x {product.name} to cart",
+        )
+
+        return Response(CartItemSerializer(item).data, status=201)
+
+
+class CartItemDeleteView(APIView):
+    """DELETE /api/cart/items/<id>/ : remove a line from my cart"""
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, item_id):
+        item = get_object_or_404(CartItem, pk=item_id, cart__user=request.user)
+        item.delete()
+        return Response(status=204)
+
+
+class OwnerNotificationListView(APIView):
+    """GET /api/owner/notifications/ : latest notifications + unread count"""
+    permission_classes = [IsOwner]
+
+    def get(self, request):
+        latest = OwnerNotification.objects.all()[:20]
+        unread = OwnerNotification.objects.filter(is_read=False).count()
+        return Response({
+            'unread_count': unread,
+            'results': OwnerNotificationSerializer(latest, many=True).data,
+        })
+
+
+class OwnerNotificationMarkReadView(APIView):
+    """POST /api/owner/notifications/mark-read/"""
+    permission_classes = [IsOwner]
+
+    def post(self, request):
+        OwnerNotification.objects.filter(is_read=False).update(is_read=True)
+        return Response({'status': 'ok'})
+
+    

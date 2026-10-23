@@ -246,6 +246,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:8080',
     'http://localhost:8080',
     'http://0.0.0.0:5500',
+    'https://bavalekarpragati.github.io',  # Added for deployed frontend
 ] + \
 [o for o in os.environ.get('CORS_ORIGINS', '').split(',') if o]
 

@@ -10,5 +10,3 @@ psycopg2-binary==2.9.12
 python-dotenv==1.2.2
 reportlab==5.0.0
 sqlparse==0.5.5
-pip install python-dotenv
-pip freeze > requirements.txt
